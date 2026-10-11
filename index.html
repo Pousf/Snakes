@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Serpents &amp; Orbes</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%; background: #04050b; overflow: hidden;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #eaf0ff; touch-action: none; overscroll-behavior: none;
+  -webkit-user-select: none; user-select: none;
+}
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+#hud, #board {
+  position: fixed; top: 12px; pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0,0,0,.85); line-height: 1.5;
+}
+#hud { left: 14px; font-size: 14px; }
+#hud b { font-size: 24px; }
+#board { right: 14px; text-align: right; font-size: 13px; min-width: 130px; }
+#board h2 { margin: 0 0 4px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; opacity: .6; font-weight: 600; }
+#board .me { color: #7dffc9; font-weight: 700; }
+#online { opacity: .8; }
+
+#boost {
+  display: none; position: fixed; right: 18px; bottom: 22px; z-index: 5;
+  width: 76px; height: 76px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35);
+  background: rgba(106,168,255,.25); color: #fff; font-size: 32px;
+  touch-action: none; -webkit-tap-highlight-color: transparent;
+}
+#boost:active { background: rgba(125,255,201,.4); }
+@media (pointer: coarse) { #boost { display: block; } }
+
+#overlay {
+  position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+  background: rgba(4,5,11,.55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); padding: 16px;
+}
+#overlay[hidden] { display: none; }
+.card {
+  max-width: 420px; width: 100%; background: rgba(14,18,38,.93);
+  border: 1px solid rgba(140,160,255,.25); border-radius: 18px; padding: 26px 24px;
+  text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+}
+h1 {
+  margin: 0 0 6px; font-size: 34px;
+  background: linear-gradient(90deg, #7dffc9, #6aa8ff, #d38bff);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.card p { margin: 8px 0; line-height: 1.45; opacity: .92; }
+.card p.status { font-size: 13px; opacity: .8; }
+.card input {
+  width: 100%; margin: 12px 0 4px; padding: 12px 14px; font-size: 16px; text-align: center;
+  background: rgba(255,255,255,.07); color: #fff; border: 1px solid rgba(255,255,255,.2);
+  border-radius: 10px; outline: none; -webkit-user-select: text; user-select: text;
+}
+.card input:focus { border-color: #6aa8ff; }
+.card button { font-family: inherit; cursor: pointer; }
+.card button#play {
+  width: 100%; margin-top: 10px; padding: 13px; font-size: 18px; font-weight: 700;
+  color: #04050b; border: 0; border-radius: 10px;
+  background: linear-gradient(90deg, #7dffc9, #6aa8ff);
+}
+.card button#play:hover:not(:disabled) { filter: brightness(1.1); }
+.card button#play:disabled { opacity: .5; cursor: default; }
+.card button#solo {
+  width: 100%; margin-top: 8px; padding: 10px; font-size: 14px; color: #eaf0ff;
+  background: transparent; border: 1px solid rgba(255,255,255,.25); border-radius: 10px;
+}
+.card button#solo:hover { background: rgba(255,255,255,.08); }
+.help { list-style: none; padding: 0; margin: 16px 0 0; font-size: 13px; opacity: .75; text-align: left; line-height: 1.75; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div>Score <b id="score">0</b></div>
+  <div>Éliminations <span id="kills">0</span> · Record <span id="best">0</span></div>
+  <div id="online" hidden></div>
+</div>
+<div id="board"><h2>Classement</h2><div id="rows"></div></div>
+<button id="boost" aria-label="Accélérer">⚡</button>
+
+<div id="overlay">
+  <div class="card">
+    <h1 id="title">Serpents &amp; Orbes</h1>
+    <p id="msg">Mange les orbes lumineux pour grandir. Évite le corps des autres serpents et le bord de l’arène !</p>
+    <p id="status" class="status" hidden></p>
+    <input id="name" maxlength="12" placeholder="Ton pseudo" autocomplete="off">
+    <button id="play">Jouer</button>
+    <button id="solo" hidden>Jouer en solo (sans serveur)</button>
+    <ul class="help">
+      <li>🖱️ <b>Souris / doigt</b> : diriger le serpent</li>
+      <li>⚡ <b>Clic maintenu</b>, <b>Espace</b> ou bouton ⚡ : accélérer (ça te fait perdre un peu de taille)</li>
+      <li>⌨️ <b>← →</b> ou <b>Q / D</b> : tourner au clavier</li>
+    </ul>
+  </div>
+</div>
+
+<script src="core.js"></script>
+<script>
+(() => {
+'use strict';
+
+const SC = window.SnakeCore;
+if (!SC) {
+  document.body.textContent = 'core.js est introuvable : mets-le dans le même dossier que cette page.';
+  return;
+}
+const { C, wrapAngle, angDiff, radiusOf, segCount, spacingOf, orbRadius, scoreOf, resizeSegs, followChain } = SC;
+const WORLD_R = C.WORLD_R;
+
+/* ---------- Réglages ---------- */
+// Adresse du serveur en ligne, par exemple 'wss://mon-serveur.onrender.com' (wss obligatoire sur une page https).
+// Laisse vide pour jouer en solo. Pour essayer sans modifier ce fichier : ajoute ?server=wss://... à l'adresse de la page.
+const DEFAULT_SERVER_URL = '';
+const PLAYER_HUE = 150;
+const INTERP_MS = 90;        // en ligne : on affiche le jeu avec ~0,1 s de retard pour lisser les mouvements
+
+const qServer = new URLSearchParams(location.search).get('server') || '';
+const SERVER_URL = /^wss?:\/\/\S+$/i.test(qServer) ? qServer : DEFAULT_SERVER_URL;
+let mode = SERVER_URL ? 'online' : 'solo';
+
+/* ---------- Canvas ---------- */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------- Interface ---------- */
+const $ = id => document.getElementById(id);
+const overlay = $('overlay'), titleEl = $('title'), msgEl = $('msg'), statusEl = $('status');
+const nameInput = $('name'), playBtn = $('play'), soloBtn = $('solo');
+const scoreEl = $('score'), killsEl = $('kills'), bestEl = $('best'), onlineEl = $('online'), rowsEl = $('rows'), boostBtn = $('boost');
+
+/* ---------- État ---------- */
+let state = 'menu';          // 'menu' | 'joining' | 'play' | 'over'
+let myId = 0;
+let watchId = 0;             // serpent suivi par la caméra quand on ne joue pas
+let needCamSnap = false;
+let overlayVisible = true;
+let now = 0;
+let score = 0, kills = 0, best = 0;
+let lbTimer = 0;
+let world = null;            // mode solo uniquement
+const cam = { x: 0, y: 0, zoom: 1 };
+const input = { mode: 'pointer', has: false, px: 0, py: 0, left: false, right: false, boostKey: false, boostPtr: false, boostBtn: false };
+
+try { best = +localStorage.getItem('serpents-best') || 0; } catch (e) {}
+try { nameInput.value = localStorage.getItem('serpents-name') || ''; } catch (e) {}
+bestEl.textContent = best;
+
+/* ---------- Réseau ---------- */
+const net = {
+  ws: null, connected: false, stop: false, retry: 0, timer: 0,
+  status: 'Connexion au serveur…', humans: 0, kills: 0,
+  roster: new Map(),   // id -> { name, hue }
+  orbs: new Map(),     // id -> orbe
+  snaps: [],           // instantanés reçus (pour l'interpolation)
+  views: new Map(),    // id -> serpent affiché (avec son corps reconstruit)
+  snapCount: 0, lastSent: null, lastSentAt: 0
+};
+
+const orbFromArr = a => ({ id: a[0], x: a[1], y: a[2], v: a[3], hue: a[4], r: orbRadius(a[3]) });
+
+function makeView(id, flat, x, y, ang, g) {
+  const v = { id, name: '?', hue: 200, x: x || 0, y: y || 0, angle: ang || 0, growth: g || 0, r: 7, boosting: false, kills: 0, segs: [] };
+  if (flat && flat.length >= 2) {
+    for (let i = 0; i + 1 < flat.length; i += 2) v.segs.push({ x: flat[i], y: flat[i + 1] });
+  } else {
+    const n = segCount(v.growth), sp = spacingOf(radiusOf(v.growth));
+    for (let i = 0; i < n; i++) v.segs.push({ x: v.x - Math.cos(v.angle) * sp * i, y: v.y - Math.sin(v.angle) * sp * i });
+  }
+  return v;
+}
+
+function netSend(obj) {
+  if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(obj));
+}
+
+function netConnect() {
+  if (mode !== 'online' || net.stop) return;
+  clearTimeout(net.timer);
+  net.status = net.retry ? `Connexion au serveur… (essai ${net.retry + 1}). Un serveur gratuit peut mettre une minute à se réveiller.` : 'Connexion au serveur…';
+  refreshMenu();
+  let ws;
+  try { ws = new WebSocket(SERVER_URL); }
+  catch (e) { net.stop = true; net.status = 'Adresse du serveur invalide.'; refreshMenu(); return; }
+  net.ws = ws;
+  ws.onmessage = onNetMessage;
+  ws.onclose = () => { if (net.ws === ws) onNetClose(); };
+  ws.onerror = () => {};
+}
+
+function onNetClose() {
+  net.connected = false; net.ws = null;
+  net.orbs.clear(); net.snaps.length = 0; net.views.clear(); net.roster.clear();
+  onlineEl.hidden = true;
+  if (net.stop) return;
+  if (state === 'play' || state === 'joining') {
+    state = 'over';
+    net.lostShown = true;
+    titleEl.textContent = 'Connexion perdue';
+    msgEl.textContent = 'Le serveur ne répond plus. J’essaie de me reconnecter…';
+    showOverlay(true);
+  }
+  net.retry++;
+  if (net.retry > 12) {
+    net.status = 'Serveur injoignable pour le moment. Tu peux réessayer ou jouer en solo.';
+  } else {
+    net.status = 'Reconnexion…';
+    net.timer = setTimeout(netConnect, Math.min(8000, 1500 + net.retry * 1000));
+  }
+  refreshMenu();
+}
+
+function onNetMessage(ev) {
+  if (typeof ev.data !== 'string') return;
+  let m;
+  try { m = JSON.parse(ev.data); } catch (e) { return; }
+  switch (m.t) {
+    case 'hello': onHello(m); break;
+    case 's': onSnapshot(m); break;
+    case 'joined':
+      myId = m.id; net.kills = 0; net.lastSent = null; needCamSnap = true;
+      if (state === 'joining') beginPlay();
+      break;
+    case 'dead':
+      if (state === 'play') {
+        const why = m.by ? `Tu as percuté ${m.by}.` : (m.why === 'border' ? 'Tu as touché le bord de l’arène.' : 'Tu as été éliminé.');
+        onPlayerDeath(why, m.score | 0, m.kills | 0);
+      }
+      break;
+    case 'kill': net.kills = m.n | 0; break;
+    case 'full':
+      if (state === 'joining') { state = 'menu'; msgEl.textContent = 'Le serveur est plein, réessaie dans un instant.'; refreshMenu(); }
+      break;
+  }
+}
+
+function onHello(m) {
+  if (m.v !== C.PROTOCOL) {
+    net.stop = true;
+    net.status = 'Version du serveur incompatible : recharge la page.';
+    refreshMenu();
+    try { net.ws.close(); } catch (e) {}
+    return;
+  }
+  net.roster.clear(); net.orbs.clear(); net.snaps.length = 0; net.views.clear();
+  for (const a of m.orbs) net.orbs.set(a[0], orbFromArr(a));
+  for (const s of m.snakes) {
+    net.roster.set(s.id, { name: s.name, hue: s.hue });
+    net.views.set(s.id, makeView(s.id, s.segs));
+  }
+  net.connected = true; net.retry = 0; net.humans = m.n | 0;
+  if (state === 'joining') state = 'menu';
+  if (net.lostShown) {                           // on revient après une coupure
+    net.lostShown = false;
+    titleEl.textContent = 'Reconnecté';
+    msgEl.textContent = 'La connexion est revenue. Tu peux rejouer.';
+  }
+  updateOnlineLabel();
+  refreshMenu();
+}
+
+function onSnapshot(m) {
+  if (m['+']) for (const r of m['+']) net.roster.set(r[0], { name: r[1], hue: r[2] });
+  if (m.oa) for (const a of m.oa) net.orbs.set(a[0], orbFromArr(a));
+  if (m.or) {                                   // orbe mangé : on le retire un peu plus tard, quand la tête affichée (en retard) l'atteint
+    const gone = performance.now() + INTERP_MS;
+    for (const id of m.or) { const o = net.orbs.get(id); if (o) o.gone = gone; }
+  }
+  const map = new Map();
+  for (const p of m.p) map.set(p[0], p);
+  net.snaps.push({ ta: performance.now(), map });
+  if (net.snaps.length > 12) net.snaps.shift();
+  if ((m.n | 0) !== net.humans) { net.humans = m.n | 0; updateOnlineLabel(); refreshMenu(); }
+  if (++net.snapCount % 90 === 0) {            // oublie les serpents disparus
+    const present = new Set();
+    for (const sn of net.snaps) for (const id of sn.map.keys()) present.add(id);
+    for (const id of net.roster.keys()) if (!present.has(id)) net.roster.delete(id);
+  }
+}
+
+function updateOnlineLabel() {
+  onlineEl.hidden = !net.connected;
+  onlineEl.textContent = `🌐 ${net.humans} joueur${net.humans > 1 ? 's' : ''} en ligne`;
+}
+
+/* Reconstruit les serpents à l'instant « maintenant - INTERP_MS » à partir des instantanés.
+   Seules les têtes voyagent sur le réseau : le corps est une chaîne recalculée ici. */
+function netView(tms) {
+  for (const [id, o] of net.orbs) if (o.gone && tms >= o.gone) net.orbs.delete(id);
+  const buf = net.snaps;
+  if (!buf.length) return { snakes: [], orbs: net.orbs.values(), me: null };
+  const tr = tms - INTERP_MS;
+  while (buf.length > 2 && buf[1].ta <= tr) buf.shift();
+  const A = buf[0], B = buf.length > 1 ? buf[1] : buf[0];
+  let alpha = B.ta > A.ta ? (tr - A.ta) / (B.ta - A.ta) : 1;
+  alpha = Math.max(0, Math.min(1.3, alpha));
+
+  const out = [], seen = new Set();
+  for (const [id, pb] of B.map) {
+    const pa = A.map.get(id) || pb;
+    const x = pa[1] + (pb[1] - pa[1]) * alpha;
+    const y = pa[2] + (pb[2] - pa[2]) * alpha;
+    const ang = pa[3] + wrapAngle(pb[3] - pa[3]) * alpha;
+    const g = pa[4] + (pb[4] - pa[4]) * alpha;
+    let v = net.views.get(id);
+    if (!v) { v = makeView(id, null, x, y, ang, g); net.views.set(id, v); }
+    v.x = x; v.y = y; v.angle = ang; v.growth = g; v.boosting = !!pb[5]; v.r = radiusOf(g);
+    const info = net.roster.get(id);
+    if (info) { v.name = info.name; v.hue = info.hue; }
+    resizeSegs(v.segs, segCount(g));
+    v.segs[0].x = x; v.segs[0].y = y;
+    followChain(v.segs, spacingOf(v.r));
+    out.push(v); seen.add(id);
+  }
+  for (const id of net.views.keys()) if (!seen.has(id)) net.views.delete(id);
+  return { snakes: out, orbs: net.orbs.values(), me: state === 'play' ? (net.views.get(myId) || null) : null };
+}
+
+function netSendInput(t) {
+  if (state !== 'play' || !net.ws || net.ws.readyState !== 1) return;
+  const spec = currentInput(), L = net.lastSent;
+  const changed = !L || spec.m !== L.m || spec.d !== L.d || spec.b !== L.b ||
+    (spec.m === 'a' && Math.abs(angDiff(spec.a, L.a)) > 0.02);
+  if ((changed && t - net.lastSentAt >= 30) || t - net.lastSentAt > 1000) {
+    net.lastSent = spec; net.lastSentAt = t;
+    net.ws.send(JSON.stringify({ t: 'in', m: spec.m, a: spec.a, d: spec.d, b: spec.b }));
+  }
+}
+
+/* ---------- Mode solo (le même monde, simulé dans la page) ---------- */
+function initSolo() {
+  world = new SC.World({ targetPop: 9 });
+  world.onKill = (victim, killer, why) => {
+    if (victim.id !== myId || state !== 'play') return;
+    const text = why === 'snake' ? `Tu as percuté ${killer ? killer.name : 'un serpent'}.` : 'Tu as touché le bord de l’arène.';
+    onPlayerDeath(text, scoreOf(victim.growth), victim.kills);
+  };
+  const first = world.snakes[0];
+  if (first) { cam.x = first.x; cam.y = first.y; }
+}
+
+function enterSolo() {
+  net.stop = true;
+  clearTimeout(net.timer);
+  const ws = net.ws;
+  net.ws = null; net.connected = false;
+  if (ws) { try { ws.close(); } catch (e) {} }
+  onlineEl.hidden = true;
+  mode = 'solo'; state = 'menu';
+  initSolo();
+  refreshMenu();
+  startGame();
+}
+
+/* ---------- Partie ---------- */
+function showOverlay(v) {
+  overlayVisible = v;
+  overlay.hidden = !v;
+  if (v && !playBtn.disabled) playBtn.focus();
+}
+
+function refreshMenu() {
+  const label = state === 'over' ? 'Rejouer' : 'Jouer';
+  if (mode === 'solo') {
+    statusEl.hidden = true; soloBtn.hidden = true;
+    playBtn.disabled = false; playBtn.textContent = label;
+    return;
+  }
+  soloBtn.hidden = false;
+  statusEl.hidden = false;
+  if (net.connected) {
+    statusEl.textContent = `🟢 Connecté · ${net.humans} joueur${net.humans > 1 ? 's' : ''} en ligne`;
+    playBtn.disabled = state === 'joining';
+    playBtn.textContent = state === 'joining' ? '…' : label;
+  } else if (net.retry > 12) {
+    statusEl.textContent = net.status;
+    playBtn.disabled = false; playBtn.textContent = 'Réessayer';
+  } else {
+    statusEl.textContent = net.status;
+    playBtn.disabled = true; playBtn.textContent = 'Connexion…';
+  }
+}
+
+function resetInput() {
+  input.has = false; input.mode = 'pointer';
+  input.left = input.right = input.boostKey = input.boostPtr = input.boostBtn = false;
+}
+
+function beginPlay() {
+  state = 'play';
+  kills = 0; score = 0;
+  killsEl.textContent = '0'; scoreEl.textContent = '0';
+  showOverlay(false);
+}
+
+function startGame() {
+  if (state === 'play' || state === 'joining') return;
+  const name = (nameInput.value.trim() || 'Toi').slice(0, 12);
+  try { localStorage.setItem('serpents-name', name); } catch (e) {}
+  nameInput.blur();
+  resetInput();
+  if (mode === 'solo') {
+    const s = world.addHuman(name, PLAYER_HUE);
+    myId = s.id; needCamSnap = true;
+    beginPlay();
+  } else {
+    if (!net.connected) {                       // bouton « Réessayer »
+      net.retry = 0; net.stop = false; netConnect();
+      return;
+    }
+    state = 'joining';
+    refreshMenu();
+    netSend({ t: 'join', name });
+    setTimeout(() => {                           // pas de réponse : on revient au menu
+      if (state === 'joining') { state = 'menu'; refreshMenu(); }
+    }, 6000);
+  }
+}
+
+function onPlayerDeath(reason, finalScore, finalKills) {
+  state = 'over';
+  input.boostKey = input.boostPtr = input.boostBtn = false;
+  if (finalScore > best) {
+    best = finalScore;
+    try { localStorage.setItem('serpents-best', best); } catch (e) {}
+  }
+  bestEl.textContent = best;
+  setTimeout(() => {
+    if (state !== 'over') return;
+    titleEl.textContent = 'Perdu !';
+    msgEl.textContent = `${reason} Score : ${finalScore} · Éliminations : ${finalKills} · Record : ${best}.`;
+    refreshMenu();
+    showOverlay(true);
+  }, 700);
+}
+
+/* ---------- Entrées ---------- */
+function currentInput() {
+  const b = (input.boostKey || input.boostPtr || input.boostBtn) ? 1 : 0;
+  if (input.mode === 'keys') return { m: 'k', d: (input.right ? 1 : 0) - (input.left ? 1 : 0), b };
+  if (input.has) return { m: 'a', a: Math.round(Math.atan2(input.py - H / 2, input.px - W / 2) * 1000) / 1000, b };
+  return { m: 'n', b };
+}
+
+window.addEventListener('pointermove', e => {
+  input.px = e.clientX; input.py = e.clientY; input.has = true; input.mode = 'pointer';
+});
+window.addEventListener('pointerdown', e => {
+  input.px = e.clientX; input.py = e.clientY; input.has = true; input.mode = 'pointer';
+  if (e.pointerType === 'mouse' && e.button === 0 && state === 'play') input.boostPtr = true;
+});
+const releasePtr = () => { input.boostPtr = false; };
+window.addEventListener('pointerup', releasePtr);
+window.addEventListener('pointercancel', releasePtr);
+
+boostBtn.addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); input.boostBtn = true; });
+const releaseBtn = () => { input.boostBtn = false; };
+boostBtn.addEventListener('pointerup', releaseBtn);
+boostBtn.addEventListener('pointerleave', releaseBtn);
+boostBtn.addEventListener('pointercancel', releaseBtn);
+
+const LEFT = ['ArrowLeft', 'q', 'Q', 'a', 'A'];
+const RIGHT = ['ArrowRight', 'd', 'D'];
+const BOOST = [' ', 'ArrowUp', 'z', 'Z', 'w', 'W'];
+window.addEventListener('keydown', e => {
+  if (overlayVisible) {
+    if (e.key === 'Enter') { e.preventDefault(); if (!playBtn.disabled) startGame(); }
+    return;
+  }
+  if (LEFT.includes(e.key)) { input.left = true; input.mode = 'keys'; e.preventDefault(); }
+  else if (RIGHT.includes(e.key)) { input.right = true; input.mode = 'keys'; e.preventDefault(); }
+  else if (BOOST.includes(e.key)) { input.boostKey = true; e.preventDefault(); }
+});
+window.addEventListener('keyup', e => {
+  if (LEFT.includes(e.key)) input.left = false;
+  else if (RIGHT.includes(e.key)) input.right = false;
+  else if (BOOST.includes(e.key)) input.boostKey = false;
+});
+window.addEventListener('blur', () => {
+  input.left = input.right = input.boostKey = input.boostPtr = input.boostBtn = false;
+});
+playBtn.addEventListener('click', startGame);
+soloBtn.addEventListener('click', enterSolo);
+
+/* ---------- Caméra, interface en jeu ---------- */
+function camFocus(view) {
+  if (view.me) return view.me;
+  let w = null;
+  if (watchId) for (const s of view.snakes) if (s.id === watchId) { w = s; break; }
+  if (!w) {
+    let bg = -1;
+    for (const s of view.snakes) if (s.growth > bg) { bg = s.growth; w = s; }
+    watchId = w ? w.id : 0;
+  }
+  return w;
+}
+
+function updateCamera(dt, view) {
+  const f = camFocus(view);
+  if (!f) return;
+  if (needCamSnap && view.me) { cam.x = f.x; cam.y = f.y; needCamSnap = false; }
+  const k = 1 - Math.exp(-10 * dt);
+  cam.x += (f.x - cam.x) * k;
+  cam.y += (f.y - cam.y) * k;
+  const base = Math.max(0.6, Math.min(1, Math.min(W, H) / 800));
+  const tz = base * Math.max(0.55, 1 / (1 + f.growth / 400));
+  cam.zoom += (tz - cam.zoom) * (1 - Math.exp(-3 * dt));
+}
+
+function updateHud(view, dt) {
+  const me = view.me;
+  if (state === 'play' && me) {
+    const sc = scoreOf(me.growth);
+    if (sc !== score) { score = sc; scoreEl.textContent = sc; }
+    const k = mode === 'solo' ? me.kills : net.kills;
+    if (k !== kills) { kills = k; killsEl.textContent = k; }
+  }
+  lbTimer -= dt;
+  if (lbTimer <= 0) { lbTimer = 0.4; updateLeaderboard(view); }
+}
+
+function updateLeaderboard(view) {
+  const sorted = view.snakes.slice().sort((a, b) => b.growth - a.growth);
+  const rows = [];
+  const line = (s, i) => {
+    const d = document.createElement('div');
+    if (view.me && s.id === view.me.id) d.className = 'me';
+    d.textContent = `${i + 1}. ${s.name} — ${scoreOf(s.growth)}`;
+    return d;
+  };
+  sorted.slice(0, 5).forEach((s, i) => rows.push(line(s, i)));
+  if (view.me) {
+    const idx = sorted.indexOf(view.me);
+    if (idx >= 5) rows.push(line(view.me, idx));
+  }
+  rowsEl.replaceChildren(...rows);
+}
+
+/* ---------- Dessin ---------- */
+const colorCache = new Map();
+function snakeColors(h) {
+  let c = colorCache.get(h);
+  if (!c) {
+    c = { c1: `hsl(${h},85%,55%)`, c2: `hsl(${h},85%,42%)`, boost: `hsl(${h},100%,72%)` };
+    colorCache.set(h, c);
+  }
+  return c;
+}
+const TAU = Math.PI * 2;
+
+function drawSnake(s, vw, vh, isMe) {
+  const segs = s.segs, r = s.r, len = segs.length, col = snakeColors(s.hue);
+  for (let i = len - 1; i >= 0; i--) {
+    const q = segs[i];
+    if (Math.abs(q.x - cam.x) > vw + r || Math.abs(q.y - cam.y) > vh + r) continue;
+    const tail = Math.min(1, (len - 1 - i) / 6);
+    ctx.fillStyle = s.boosting ? col.boost : ((i >> 1) % 2 ? col.c2 : col.c1);
+    ctx.beginPath();
+    ctx.arc(q.x, q.y, r * (0.55 + 0.45 * tail), 0, TAU);
+    ctx.fill();
+  }
+  const hx = Math.cos(s.angle), hy = Math.sin(s.angle), ex = -hy, ey = hx;
+  for (const sg of [-1, 1]) {
+    const px = s.x + hx * r * 0.35 + ex * r * 0.5 * sg;
+    const py = s.y + hy * r * 0.35 + ey * r * 0.5 * sg;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(px, py, r * 0.34, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.beginPath(); ctx.arc(px + hx * r * 0.12, py + hy * r * 0.12, r * 0.17, 0, TAU); ctx.fill();
+  }
+  ctx.fillStyle = isMe ? '#7dffc9' : 'rgba(255,255,255,0.85)';
+  ctx.font = (isMe ? 'bold ' : '') + '12px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(s.name, s.x, s.y - r - 10);
+}
+
+function draw(view) {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = '#04050b';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(cam.zoom, cam.zoom);
+  ctx.translate(-cam.x, -cam.y);
+
+  const vw = W / 2 / cam.zoom + 40, vh = H / 2 / cam.zoom + 40;
+
+  // arène
+  ctx.beginPath(); ctx.arc(0, 0, WORLD_R, 0, TAU);
+  ctx.fillStyle = '#0b1022'; ctx.fill();
+
+  // grille de points
+  const gs = 90;
+  ctx.fillStyle = 'rgba(120,140,255,0.14)';
+  const x0 = Math.floor((cam.x - vw) / gs) * gs, x1 = cam.x + vw;
+  const y0 = Math.floor((cam.y - vh) / gs) * gs, y1 = cam.y + vh;
+  for (let gx = x0; gx < x1; gx += gs) {
+    for (let gy = y0; gy < y1; gy += gs) {
+      if (gx * gx + gy * gy < WORLD_R * WORLD_R) ctx.fillRect(gx - 1.5, gy - 1.5, 3, 3);
+    }
+  }
+
+  // bord
+  ctx.beginPath(); ctx.arc(0, 0, WORLD_R + 8, 0, TAU);
+  ctx.lineWidth = 18; ctx.strokeStyle = 'rgba(255,60,90,0.25)'; ctx.stroke();
+  ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(255,90,120,0.9)'; ctx.stroke();
+
+  // orbes — ceux qui passent près d'une tête sont aspirés (effet visuel, la collecte réelle est côté simulation)
+  const sn = view.snakes;
+  for (const o of view.orbs) {
+    if (Math.abs(o.x - cam.x) > vw + 90 || Math.abs(o.y - cam.y) > vh + 90) continue;
+    if (!o.core) {
+      o.core = `hsl(${o.hue},95%,66%)`;
+      o.glow = `hsla(${o.hue},95%,60%,0.22)`;
+      o.ph = Math.random() * TAU;
+    }
+    let bw = 0, bx = 0, by = 0;
+    for (let k = 0; k < sn.length; k++) {
+      const h = sn[k], dx = h.x - o.x, dy = h.y - o.y, pr = h.r + 75;
+      if (dx > pr || dx < -pr || dy > pr || dy < -pr) continue;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= pr * pr) continue;
+      // l'orbe glisse vers la tête et l'atteint exactement à la distance où il est mangé (voir eatOrbs dans core.js)
+      const d = Math.sqrt(d2), eatD = h.r + 34;
+      const w = d <= eatD ? 1 : Math.pow((pr - d) / (pr - eatD), 1.5);
+      if (w > bw) { bw = w; bx = dx; by = dy; }
+    }
+    const ox = o.x + bx * bw, oy = o.y + by * bw;
+    const r = o.r * (1 + 0.18 * Math.sin(now * 3 + o.ph));
+    ctx.fillStyle = o.glow;
+    ctx.beginPath(); ctx.arc(ox, oy, r * 2.2, 0, TAU); ctx.fill();
+    ctx.fillStyle = o.core;
+    ctx.beginPath(); ctx.arc(ox, oy, r, 0, TAU); ctx.fill();
+  }
+
+  // serpents
+  for (const s of sn) drawSnake(s, vw, vh, view.me === s);
+
+  ctx.restore();
+
+  // mini-carte
+  const mr = 54, mx = 16 + mr, my = H - 16 - mr;
+  ctx.beginPath(); ctx.arc(mx, my, mr, 0, TAU);
+  ctx.fillStyle = 'rgba(10,14,30,0.6)'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.stroke();
+  for (const s of sn) {
+    const isMe = view.me === s;
+    ctx.fillStyle = isMe ? '#fff' : `hsl(${s.hue},85%,60%)`;
+    ctx.beginPath(); ctx.arc(mx + s.x / WORLD_R * mr, my + s.y / WORLD_R * mr, isMe ? 3.5 : 2.5, 0, TAU); ctx.fill();
+  }
+}
+
+/* ---------- Boucle principale ---------- */
+let last = performance.now();
+function frame(t) {
+  const dt = Math.min(0.05, Math.max(0, (t - last) / 1000));
+  last = t; now += dt;
+
+  let view;
+  if (mode === 'solo') {
+    if (state === 'play') world.setInput(myId, currentInput());
+    world.step(dt);
+    view = { snakes: world.snakes, orbs: world.orbs, me: state === 'play' ? world.byId(myId) : null };
+  } else {
+    netSendInput(t);
+    view = netView(t);
+  }
+  updateHud(view, dt);
+  updateCamera(dt, view);
+  draw(view);
+  requestAnimationFrame(frame);
+}
+
+if (mode === 'solo') initSolo(); else netConnect();
+refreshMenu();
+showOverlay(true);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
